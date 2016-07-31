@@ -12,7 +12,7 @@ REPO_PATH := github.com/deis/${SHORT_NAME}
 
 # The following variables describe the containerized development environment
 # and other build options
-DEV_ENV_IMAGE := quay.io/deis/go-dev:0.13.0
+DEV_ENV_IMAGE := index.tenxcloud.com/tuhuayuan/go-dev:v1.0
 DEV_ENV_WORK_DIR := /go/src/${REPO_PATH}
 DEV_ENV_CMD := docker run --rm -v ${CURDIR}:${DEV_ENV_WORK_DIR} -w ${DEV_ENV_WORK_DIR} ${DEV_ENV_IMAGE}
 DEV_ENV_CMD_INT := docker run -it --rm -v ${CURDIR}:${DEV_ENV_WORK_DIR} -w ${DEV_ENV_WORK_DIR} ${DEV_ENV_IMAGE}
@@ -37,10 +37,10 @@ dev: check-docker
 	${DEV_ENV_CMD_INT} bash
 
 dev-registry: check-docker
-	@docker inspect registry >/dev/null 2>&1 && docker start registry || docker run --restart="always" -d -p 5000:5000 --name registry registry:0.9.1
+	@docker inspect registry >/dev/null 2>&1 && docker start registry || docker run --restart="always" -d -p 5000:5000 --name registry index.tenxcloud.com/docker_library/registry:2
 	@echo
 	@echo "To use a local registry for Deis development:"
-	@echo "    export DEIS_REGISTRY=`docker-machine ip $$(docker-machine active 2>/dev/null) 2>/dev/null || echo $(HOST_IPADDR) `:5000/"
+	@echo "    export DEIS_REGISTRY=`docker-machine ip $$(docker-machine active 2>/dev/null) 2>/dev/null || echo DOCKER_HOST `:5000/"
 
 # Containerized dependency resolution
 bootstrap: check-docker

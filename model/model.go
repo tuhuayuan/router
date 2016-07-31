@@ -9,6 +9,7 @@ import (
 	modelerUtility "github.com/deis/router/utils/modeler"
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/errors"
+	"k8s.io/kubernetes/pkg/apis/extensions"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
 	"k8s.io/kubernetes/pkg/labels"
 )
@@ -42,7 +43,7 @@ type RouterConfig struct {
 	ServerNameHashMaxSize    string      `key:"serverNameHashMaxSize" constraint:"^[1-9]\\d*[kKmM]?$"`
 	ServerNameHashBucketSize string      `key:"serverNameHashBucketSize" constraint:"^[1-9]\\d*[kKmM]?$"`
 	GzipConfig               *GzipConfig `key:"gzip"`
-	BodySize                 string      `key:"bodySize" constraint:"^[0-9]\\d*[kKmM]?$"`
+	BodySize                 string      `key:"bodySize" constraint:"^[1-9]\\d*[kKmM]?$"`
 	ProxyRealIPCIDRs         []string    `key:"proxyRealIpCidrs" constraint:"^((([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\\/([0-9]|[1-2][0-9]|3[0-2]))?(\\s*,\\s*)?)+$"`
 	ErrorLogLevel            string      `key:"errorLogLevel" constraint:"^(info|notice|warn|error|crit|alert|emerg)$"`
 	PlatformDomain           string      `key:"platformDomain" constraint:"(?i)^([a-z0-9]+(-[a-z0-9]+)*\\.)+[a-z]{2,}$"`
@@ -197,7 +198,7 @@ func Build(kubeClient *client.Client) (*RouterConfig, error) {
 	//   All services with label "routable=true"
 	//   deis-builder service, if it exists
 	// These are used to construct a model...
-	routerRC, err := getRC(kubeClient)
+	routerMeta, err := getRouterMeta(kubeClient)
 	if err != nil {
 		return nil, err
 	}
@@ -219,20 +220,30 @@ func Build(kubeClient *client.Client) (*RouterConfig, error) {
 		return nil, err
 	}
 	// Build the model...
-	routerConfig, err := build(kubeClient, routerRC, platformCertSecret, dhParamSecret, appServices, builderService)
+	routerConfig, err := build(kubeClient, routerMeta, platformCertSecret, dhParamSecret, appServices, builderService)
 	if err != nil {
 		return nil, err
 	}
 	return routerConfig, nil
 }
 
-func getRC(kubeClient *client.Client) (*api.ReplicationController, error) {
-	rcClient := kubeClient.ReplicationControllers(namespace)
+func getRouterMeta(kubeClient *client.Client) (*api.ObjectMeta, error) {
+	rcClient := kubeClient.ReplicationController(namespace)
 	rc, err := rcClient.Get("deis-router")
-	if err != nil {
-		return nil, err
+
+	if err == nil {
+		return rc, nil
 	}
-	return rc, nil
+
+	dsClient := rcClient.ExtensionsClient.DaemonSets(namespace)
+	ds, err := dsClient.Get("deis-router")
+
+	if err == nil {
+		return ds, nil
+	}
+
+	// TODO: Support Deployment
+	return nil, err
 }
 
 func getAppServices(kubeClient *client.Client) (*api.ServiceList, error) {
@@ -276,8 +287,8 @@ func getSecret(kubeClient *client.Client, name string, ns string) (*api.Secret, 
 	return secret, nil
 }
 
-func build(kubeClient *client.Client, routerRC *api.ReplicationController, platformCertSecret *api.Secret, dhParamSecret *api.Secret, appServices *api.ServiceList, builderService *api.Service) (*RouterConfig, error) {
-	routerConfig, err := buildRouterConfig(routerRC, platformCertSecret, dhParamSecret)
+func build(kubeClient *client.Client, routerMeta *api.ObjectMeta, platformCertSecret *api.Secret, dhParamSecret *api.Secret, appServices *api.ServiceList, builderService *api.Service) (*RouterConfig, error) {
+	routerConfig, err := buildRouterConfig(routerMeta, platformCertSecret, dhParamSecret)
 	if err != nil {
 		return nil, err
 	}
@@ -302,9 +313,9 @@ func build(kubeClient *client.Client, routerRC *api.ReplicationController, platf
 	return routerConfig, nil
 }
 
-func buildRouterConfig(rc *api.ReplicationController, platformCertSecret *api.Secret, dhParamSecret *api.Secret) (*RouterConfig, error) {
+func buildRouterConfig(meta *api.ObjectMeta, platformCertSecret *api.Secret, dhParamSecret *api.Secret) (*RouterConfig, error) {
 	routerConfig := newRouterConfig()
-	err := modeler.MapToModel(rc.Annotations, "nginx", routerConfig)
+	err := modeler.MapToModel(meta.Annotations, "nginx", routerConfig)
 	if err != nil {
 		return nil, err
 	}
