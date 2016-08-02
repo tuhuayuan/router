@@ -108,11 +108,7 @@ test-style: check-docker
 
 # This should only be executed within the containerized development environment.
 style-check:
-# display output, then check
-	gofmt -l ${GO_FILES} ${GO_DIRS}
-	@gofmt -l ${GO_FILES} ${GO_DIRS} | read; if [ $$? == 0 ]; then echo "gofmt check failed."; exit 1; fi
-	go vet ${GO_PACKAGES}
-	for package in $$(glide novendor | tr " " "\n"); do golint $$package; done
+	lint
 	shellcheck $(SHELL_SCRIPTS)
 
 test-unit:
