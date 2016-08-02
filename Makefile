@@ -72,14 +72,24 @@ dev-release: docker-build docker-push set-image
 
 set-image:
 	sed "s#\(image:\) .*#\1 ${IMAGE}#" manifests/deis-${SHORT_NAME}-rc.yaml > manifests/deis-${SHORT_NAME}-rc.tmp.yaml
+	sed "s#\(image:\) .*#\1 ${IMAGE}#" manifests/deis-${SHORT_NAME}-ds.yaml > manifests/deis-${SHORT_NAME}-ds.tmp.yaml
 
-deploy: check-kubectl dev-release
-	@kubectl describe rc deis-${SHORT_NAME} --namespace=deis >/dev/null 2>&1; \
+deploy-rc: check-kubectl dev-release
+	@kubectl describe rc deis-${SHORT_NAME} --namespace=kube-system >/dev/null 2>&1; \
 	if [ $$? -eq 0 ]; then \
-		kubectl delete rc deis-${SHORT_NAME} --namespace=deis; \
+		kubectl delete rc deis-${SHORT_NAME} --namespace=kube-system; \
 		kubectl create -f manifests/deis-${SHORT_NAME}-rc.tmp.yaml; \
 	else \
 		kubectl create -f manifests/deis-${SHORT_NAME}-rc.tmp.yaml; \
+	fi
+
+deploy-ds: check-kubectl dev-release
+	@kubectl describe daemonsets deis-${SHORT_NAME} --namespace=kube-system >/dev/null 2>&1; \
+	if [ $$? -eq 0 ]; then \
+		kubectl delete daemonsets deis-${SHORT_NAME} --namespace=kube-system; \
+		kubectl create -f manifests/deis-${SHORT_NAME}-ds.tmp.yaml; \
+	else \
+		kubectl create -f manifests/deis-${SHORT_NAME}-ds.tmp.yaml; \
 	fi
 
 examples:
