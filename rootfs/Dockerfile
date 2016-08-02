@@ -1,5 +1,6 @@
-FROM quay.io/deis/base:0.2.0
+FROM index.tenxcloud.com/tuhuayuan/deis-base:0.2.0
 
+RUN sed -i 's/archive.ubuntu.com/mirrors.ustc.edu.cn/g' /etc/apt/sources.list
 RUN adduser --system \
 	--shell /bin/bash \
 	--disabled-password \

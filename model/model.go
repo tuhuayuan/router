@@ -9,7 +9,6 @@ import (
 	modelerUtility "github.com/deis/router/utils/modeler"
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/errors"
-	"k8s.io/kubernetes/pkg/apis/extensions"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
 	"k8s.io/kubernetes/pkg/labels"
 )
@@ -194,7 +193,7 @@ func newHSTSConfig() *HSTSConfig {
 // relevant metadata concerning itself and all routable services.
 func Build(kubeClient *client.Client) (*RouterConfig, error) {
 	// Get all relevant information from k8s:
-	//   deis-router rc
+	//   deis-router rc or daemonset
 	//   All services with label "routable=true"
 	//   deis-builder service, if it exists
 	// These are used to construct a model...
@@ -228,27 +227,28 @@ func Build(kubeClient *client.Client) (*RouterConfig, error) {
 }
 
 func getRouterMeta(kubeClient *client.Client) (*api.ObjectMeta, error) {
-	rcClient := kubeClient.ReplicationController(namespace)
+	rcClient := kubeClient.ReplicationControllers(namespace)
 	rc, err := rcClient.Get("deis-router")
 
 	if err == nil {
-		return rc, nil
+		return &rc.ObjectMeta, nil
 	}
 
-	dsClient := rcClient.ExtensionsClient.DaemonSets(namespace)
+	dsClient := kubeClient.ExtensionsClient.DaemonSets(namespace)
 	ds, err := dsClient.Get("deis-router")
 
 	if err == nil {
-		return ds, nil
+		return &ds.ObjectMeta, nil
 	}
 
+	log.Printf("Get router meta error: %s", err)
 	// TODO: Support Deployment
 	return nil, err
 }
 
 func getAppServices(kubeClient *client.Client) (*api.ServiceList, error) {
 	serviceClient := kubeClient.Services(api.NamespaceAll)
-	services, err := serviceClient.List(servicesSelector)
+	services, err := serviceClient.List(api.ListOptions{LabelSelector: servicesSelector})
 	if err != nil {
 		return nil, err
 	}
