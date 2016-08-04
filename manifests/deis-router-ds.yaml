@@ -7,6 +7,8 @@ metadata:
     k8s-app: deis-router
     version: v1
     kubernetes.io/cluster-service: "true"
+  annotations:
+    router.deis.io/nginx.bodySize: "1024m"
 spec:
   selector:
     matchLabels:
@@ -16,6 +18,8 @@ spec:
       labels:
         app: deis-router
     spec:
+      nodeSelector:
+        frontEnd: "true"
       containers:
       - name: deis-router
         image: ## Image is dynamically set by `make set-image` as part of dev deployment ##
@@ -27,13 +31,13 @@ spec:
               fieldPath: metadata.namespace
         ports:
         - containerPort: 8080
-          hostPort: 10080
+          hostPort: 80
         - containerPort: 6443
-          hostPort: 10443
+          hostPort: 443
         - containerPort: 2222
-          hostPort: 10022
+          hostPort: 2222
         - containerPort: 9090
-          hostPort: 19090
+          hostPort: 9090
         livenessProbe:
           httpGet:
             path: /healthz
