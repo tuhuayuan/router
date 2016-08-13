@@ -74,7 +74,7 @@ set-image:
 	sed "s#\(image:\) .*#\1 ${IMAGE}#" manifests/deis-${SHORT_NAME}-rc.yaml > manifests/deis-${SHORT_NAME}-rc.tmp.yaml
 	sed "s#\(image:\) .*#\1 ${IMAGE}#" manifests/deis-${SHORT_NAME}-ds.yaml > manifests/deis-${SHORT_NAME}-ds.tmp.yaml
 
-deploy-rc: check-kubectl dev-release
+deploy-rc: check-kubectl set-image 
 	@kubectl describe rc deis-${SHORT_NAME} --namespace=kube-system >/dev/null 2>&1; \
 	if [ $$? -eq 0 ]; then \
 		kubectl delete rc deis-${SHORT_NAME} --namespace=kube-system; \
@@ -83,7 +83,7 @@ deploy-rc: check-kubectl dev-release
 		kubectl create -f manifests/deis-${SHORT_NAME}-rc.tmp.yaml; \
 	fi
 
-deploy-ds: check-kubectl dev-release
+deploy-ds: check-kubectl set-image 
 	@kubectl describe daemonsets deis-${SHORT_NAME} --namespace=kube-system >/dev/null 2>&1; \
 	if [ $$? -eq 0 ]; then \
 		kubectl delete daemonsets deis-${SHORT_NAME} --namespace=kube-system; \

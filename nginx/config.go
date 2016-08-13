@@ -1,10 +1,10 @@
 package nginx
 
 import (
-	"fmt"
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"strings"
 	"text/template"
 
 	"github.com/Masterminds/sprig"
@@ -99,6 +99,12 @@ http {
 		'' $standard_server_port;
 	}
 
+	# Add customer header for client certificate
+	map $ssl_client_verify $router_auth {
+		default "None";
+		"SUCCESS" $ssl_client_s_dn;
+	}
+
 	{{ $sslConfig := $routerConfig.SSLConfig }}
 	{{ $hstsConfig := $sslConfig.HSTSConfig }}{{ if $hstsConfig.Enabled }}
 	# HSTS instructs the browser to replace all HTTP links with HTTPS links for this domain until maxAge seconds from now.
@@ -119,8 +125,8 @@ http {
 		set $app_name "router-default-vhost";
 		{{ if $routerConfig.PlatformCertificate }}
 		ssl_protocols {{ $sslConfig.Protocols }};
-		ssl_certificate /opt/router/ssl/platform.crt;
-		ssl_certificate_key /opt/router/ssl/platform.key;
+		ssl_certificate /opt/router/ssl/platform/tls.crt;
+		ssl_certificate_key /opt/router/ssl/platform/tls.key;
 		{{ else }}
 		ssl_protocols TLSv1 TLSv1.1 TLSv1.2;
 		ssl_certificate /opt/router/ssl/default/default.crt;
@@ -165,13 +171,17 @@ http {
 		port_in_redirect off;
 		set $app_name "{{ $appConfig.Name }}";
 
-		{{ if index $appConfig.Certificates $domain }}
+		{{ if index $appConfig.AppCerts $domain }}
 		listen 6443 ssl http2{{ if $routerConfig.UseProxyProtocol }} proxy_protocol{{ end }};
 		ssl_protocols {{ $sslConfig.Protocols }};
 		{{ if ne $sslConfig.Ciphers "" }}ssl_ciphers {{ $sslConfig.Ciphers }};{{ end }}
 		ssl_prefer_server_ciphers on;
-		ssl_certificate /opt/router/ssl/{{ $domain }}.crt;
-		ssl_certificate_key /opt/router/ssl/{{ $domain }}.key;
+		ssl_certificate /opt/router/ssl/domains/{{ $domain }}/app/tls.crt;
+		ssl_certificate_key /opt/router/ssl/domains/{{ $domain }}/app/tls.key;
+		{{ if index $appConfig.ClientCerts $domain }}
+		ssl_verify_client on;
+		ssl_client_certificate /opt/router/ssl/domains/{{ $domain }}/client/tls.crt;
+		{{ end }}
 		{{ if ne $sslConfig.SessionCache "" }}ssl_session_cache {{ $sslConfig.SessionCache }};
 		ssl_session_timeout {{ $sslConfig.SessionTimeout }};{{ end }}
 		ssl_session_tickets {{ if $sslConfig.UseSessionTickets }}on{{ else }}off{{ end }};
@@ -200,14 +210,17 @@ http {
 			proxy_http_version 1.1;
 			proxy_set_header Upgrade $http_upgrade;
 			proxy_set_header Connection $connection_upgrade;
-
+			proxy_set_header X-Router-Auth $router_auth;
+			{{ $enforceHTTPS := or $appConfig.EnforceHTTPS $enforceHTTPS}}
 			{{ if $enforceHTTPS }}if ($access_scheme != "https") {
 				return 301 https://$host$request_uri;
 			}{{ end }}
 
 			{{ if $hstsConfig.Enabled }}add_header Strict-Transport-Security $sts always;{{ end }}
 
-			proxy_pass http://{{$appConfig.ServiceIP}}:80;{{ else }}return 503;{{ end }}
+			proxy_pass http://{{$appConfig.ServiceIP}}:80;
+
+			{{ else }} return 503; {{ end }}
 		}
 	}
 
@@ -229,34 +242,51 @@ http {
 func WriteCerts(routerConfig *model.RouterConfig, sslPath string) error {
 	// Start by deleting all certs and their corresponding keys. This will ensure certs we no longer
 	// need are deleted. Certs that are still needed will simply be re-written.
-	allCertsGlob, err := filepath.Glob(filepath.Join(sslPath, "*.crt"))
+	// /opt/router/ssl
+	//								/platform
+	// 								 				tls.cert tls.key
+	// 								/domains
+	// 								 				/www.example.com
+	// 								 												 /app
+	// 								 														 tls.cert tls.key
+	//								 												 /client
+	//								 														 tls.cert
+	//								dhparam.pem
+	domainPath := filepath.Join(sslPath, "domains")
+	platformPath := filepath.Join(sslPath, "platform")
+
+	allDomains, err := filepath.Glob(filepath.Join(domainPath, "*"))
+	allDomains = append(allDomains, platformPath)
 	if err != nil {
 		return err
 	}
-	allKeysGlob, err := filepath.Glob(filepath.Join(sslPath, "*.key"))
-	if err != nil {
-		return err
-	}
-	for _, cert := range allCertsGlob {
-		if err := os.Remove(cert); err != nil {
+	for _, domain := range allDomains {
+		if err := os.RemoveAll(domain); err != nil {
 			return err
 		}
 	}
-	for _, key := range allKeysGlob {
-		if err := os.Remove(key); err != nil {
-			return err
-		}
-	}
+	// Write platform certificate in the root path
 	if routerConfig.PlatformCertificate != nil {
-		err = writeCert("platform", routerConfig.PlatformCertificate, sslPath)
+		err = writeCert("", "", platformPath, routerConfig.PlatformCertificate)
 		if err != nil {
 			return err
 		}
 	}
+	// App certificate in $sslPath/domain/(app|client|proxy)/(tls.crt|tls.key)
 	for _, appConfig := range routerConfig.AppConfigs {
-		for domain, certificate := range appConfig.Certificates {
+		// app certs
+		for domain, certificate := range appConfig.AppCerts {
 			if certificate != nil {
-				err = writeCert(domain, certificate, sslPath)
+				err = writeCert(domain, "app", domainPath, certificate)
+				if err != nil {
+					return err
+				}
+			}
+		}
+		// client certs
+		for domain, certificate := range appConfig.ClientCerts {
+			if certificate != nil {
+				err = writeCert(domain, "client", domainPath, certificate)
 				if err != nil {
 					return err
 				}
@@ -266,10 +296,17 @@ func WriteCerts(routerConfig *model.RouterConfig, sslPath string) error {
 	return nil
 }
 
-func writeCert(context string, certificate *model.Certificate, sslPath string) error {
-	certPath := filepath.Join(sslPath, fmt.Sprintf("%s.crt", context))
-	keyPath := filepath.Join(sslPath, fmt.Sprintf("%s.key", context))
-	err := ioutil.WriteFile(certPath, []byte(certificate.Cert), 0644)
+func writeCert(domain string, context string, sslPath string, certificate *model.Certificate) error {
+	var rootPath string
+	rootPath = filepath.Join(sslPath, strings.ToLower(domain))
+	rootPath = filepath.Join(rootPath, context)
+	err := os.MkdirAll(rootPath, 0700)
+	if err != nil {
+		return err
+	}
+	certPath := filepath.Join(rootPath, "tls.crt")
+	keyPath := filepath.Join(rootPath, "tls.key")
+	err = ioutil.WriteFile(certPath, []byte(certificate.Cert), 0644)
 	if err != nil {
 		return err
 	}

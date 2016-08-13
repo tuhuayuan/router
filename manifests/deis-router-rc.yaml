@@ -9,6 +9,7 @@ metadata:
     kubernetes.io/cluster-service: "true"
   annotations:
     router.deis.io/nginx.bodySize: "1024m"
+    router.deis.io/nginx.platformDomain: xiucall.com
 spec:
   replicas: 1
   selector:

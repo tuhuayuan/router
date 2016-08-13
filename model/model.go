@@ -108,16 +108,23 @@ type AppConfig struct {
 	ConnectTimeout string   `key:"connectTimeout" constraint:"^[1-9]\\d*(ms|[smhdwMy])?$"`
 	TCPTimeout     string   `key:"tcpTimeout" constraint:"^[1-9]\\d*(ms|[smhdwMy])?$"`
 	ServiceIP      string
-	CertMappings   map[string]string `key:"certificates" constraint:"(?i)^((([a-z0-9]+(-[a-z0-9]+)*)|((\\*\\.)?[a-z0-9]+(-[a-z0-9]+)*\\.)+[a-z]{2,}):([a-z0-9]+(-[a-z0-9]+)*)(\\s*,\\s*)?)+$"`
-	Certificates   map[string]*Certificate
-	Available      bool
+	// Certificate and private key for app domains.
+	AppCerts        map[string]*Certificate
+	AppCertMappings map[string]string `key:"appCertificates" constraint:"(?i)^((([a-z0-9]+(-[a-z0-9]+)*)|((\\*\\.)?[a-z0-9]+(-[a-z0-9]+)*\\.)+[a-z]{2,}):([a-z0-9]+(-[a-z0-9]+)*)(\\s*,\\s*)?)+$"`
+	// If present, open client certificate for app domains.
+	ClientCerts        map[string]*Certificate
+	ClientCertMappings map[string]string `key:"clientCertificates" constraint:"(?i)^((([a-z0-9]+(-[a-z0-9]+)*)|((\\*\\.)?[a-z0-9]+(-[a-z0-9]+)*\\.)+[a-z]{2,}):([a-z0-9]+(-[a-z0-9]+)*)(\\s*,\\s*)?)+$"`
+	EnforceHTTPS       bool              `key:"enforceHTTPS" constraint:"(?i)^(true|false)$"`
+	Available          bool
 }
 
 func newAppConfig(routerConfig *RouterConfig) *AppConfig {
 	return &AppConfig{
 		ConnectTimeout: "30s",
+		EnforceHTTPS:   false,
 		TCPTimeout:     routerConfig.DefaultTimeout,
-		Certificates:   make(map[string]*Certificate, 0),
+		AppCerts:       make(map[string]*Certificate, 0),
+		ClientCerts:    make(map[string]*Certificate, 0),
 	}
 }
 
@@ -364,21 +371,27 @@ func buildAppConfig(kubeClient *client.Client, service api.Service, routerConfig
 	// even if that is nil.
 	for _, domain := range appConfig.Domains {
 		if strings.Contains(domain, ".") {
-			// Look for a cert-bearing secret for this domain.
-			secretName := fmt.Sprintf("%s-cert", appConfig.CertMappings[domain])
-			certSecret, err := getSecret(kubeClient, secretName, service.Namespace)
+			var certificate *Certificate
+			var err error
+			// app certificate
+			certificate, err = fetchCertificate(kubeClient, appConfig.AppCertMappings, domain, service.Namespace)
 			if err != nil {
 				return nil, err
 			}
-			if certSecret != nil {
-				certificate, err := buildCertificate(certSecret, domain)
-				if err != nil {
-					return nil, err
-				}
-				appConfig.Certificates[domain] = certificate
+			if certificate != nil {
+				appConfig.AppCerts[domain] = certificate
+			}
+			// client certificate
+			certificate, err = fetchCertificate(kubeClient, appConfig.ClientCertMappings, domain, service.Namespace)
+			if err != nil {
+				return nil, err
+			}
+			if certificate != nil {
+				appConfig.ClientCerts[domain] = certificate
 			}
 		} else {
-			appConfig.Certificates[domain] = routerConfig.PlatformCertificate
+			// default platform certificate only for app certificate
+			appConfig.AppCerts[domain] = routerConfig.PlatformCertificate
 		}
 	}
 	appConfig.ServiceIP = service.Spec.ClusterIP
@@ -389,6 +402,23 @@ func buildAppConfig(kubeClient *client.Client, service api.Service, routerConfig
 	}
 	appConfig.Available = len(endpoints.Subsets) > 0 && len(endpoints.Subsets[0].Addresses) > 0
 	return appConfig, nil
+}
+
+func fetchCertificate(kubeClient *client.Client, mappings map[string]string, domain string, ns string) (*Certificate, error) {
+	// Look for a cert-bearing secret for this domain.
+	secretName := fmt.Sprintf("%s-cert", mappings[domain])
+	certSecret, err := getSecret(kubeClient, secretName, ns)
+	if err != nil {
+		return nil, err
+	}
+	if certSecret != nil {
+		certificate, err := buildCertificate(certSecret, domain)
+		if err != nil {
+			return nil, err
+		}
+		return certificate, nil
+	}
+	return nil, nil
 }
 
 func buildBuilderConfig(service *api.Service) (*BuilderConfig, error) {
@@ -409,14 +439,12 @@ func buildCertificate(certSecret *api.Secret, context string) (*Certificate, err
 		return nil, nil
 	}
 	key, ok := certSecret.Data["tls.key"]
-	// If no key is found in the secret, warn and return nil
+	// Changed: Nil private key is acceptable
 	if !ok {
-		log.Printf("WARN: The k8s secret intended to convey the %s certificate key contained no entry \"tls.key\".\n", context)
-		return nil, nil
+		return newCertificate(string(cert[:]), ""), nil
+	} else {
+		return newCertificate(string(cert[:]), string(key[:])), nil
 	}
-	certStr := string(cert[:])
-	keyStr := string(key[:])
-	return newCertificate(certStr, keyStr), nil
 }
 
 func buildDHParam(dhParamSecret *api.Secret) (string, error) {
