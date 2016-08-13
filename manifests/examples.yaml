@@ -25,7 +25,9 @@ metadata:
     router.deis.io/routable: "true"
     app: nginx
   annotations:
-    router.deis.io/domains: nginx.cluster.local
+    router.deis.io/domains: nginx.xiucall.com
+    router.deis.io/appCertificates: nginx.xiucall.com:nginx-app-tls
+    router.deis.io/clientCertificates: nginx.xiucall.com:nginx-client-tls
 spec:
   ports:
   - port: 80
